@@ -2,17 +2,30 @@ import express from 'express'
 const router=express.Router();
 
 import User from '../models/user.js'
+import {jwtAuthMiddleware,generateToken} from './../jwt.js';
 
 
 router.post('/register',async(req,res)=>{
     try{
         const data=req.body;
+        const { email, password, name } = req.body;
+        if (!email || !password || !name) {
+            return res.status(400).json({ error: "All fields are required" });
+        }
+
         console.log(data);
         const newUser=new User(data);
 
         const response=await newUser.save();
         console.log("User data saved");
-        res.status(200).json({response:response})
+
+        const payload={
+            id:response._id
+        }
+        console.log(JSON.stringify(payload));
+        const token=generateToken(payload);
+        console.log("Token is:",token);
+        res.status(200).json({response:response,token:token})
 
     }catch(err){
         console.log(err);
@@ -27,12 +40,21 @@ router.post('/login',async(req,res)=>{
         const data=req.body;
         // console.log(data);
         const {email,password}=req.body;
+        if (!email || !password) {
+            return res.status(400).json({ error: "Email and password are required" });
+        }
 
         const user=await User.findOne({email});
         if(!user || !(await user.comparePassword(password))){
             return res.status(401).json({error:"invalid email id or password"})
         }
-        res.status(200).json({response:"login successful"})
+
+        //generate token
+        const payload={
+            id:user._id
+        }
+        const token=generateToken(payload);
+        res.status(200).json({response:"login successful",token:token});
 
     }catch(err){
         console.log(err);
