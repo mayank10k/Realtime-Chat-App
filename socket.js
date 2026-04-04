@@ -1,4 +1,5 @@
 import { Server } from 'socket.io';
+import Message from './models/message.js';
 
 const onlineUsers = {};
 let io;
@@ -14,22 +15,42 @@ export const initSocket = (httpServer) => {
   io.on('connection', (socket) => {
     console.log('A user connected:', socket.id);
 
+    // User registers with their userId after login
     socket.on('register', (userId) => {
       onlineUsers[userId] = socket.id;
+      console.log(`User ${userId} registered with socket ${socket.id}`);
       io.emit('onlineUsers', Object.keys(onlineUsers));
     });
 
-    socket.on('sendMessage', ({ senderId, receiverId, message }) => {
-      const receiverSocketId = onlineUsers[receiverId];
-      if (receiverSocketId) {
-        io.to(receiverSocketId).emit('receiveMessage', {
-          senderId,
-          message,
-          timestamp: new Date()
+    // Handle sending a message
+    socket.on('sendMessage', async ({ senderId, receiverId, message }) => {
+      try {
+        // ✅ Save to DB first
+        const newMessage = await Message.create({
+          sender: senderId,
+          receiver: receiverId,
+          content: message
         });
+
+        const receiverSocketId = onlineUsers[receiverId];
+
+        if (receiverSocketId) {
+          // ✅ Receiver is online — deliver in real time
+          io.to(receiverSocketId).emit('receiveMessage', {
+            senderId,
+            message,
+            timestamp: newMessage.createdAt
+          });
+        }
+        // ✅ If offline, message is already saved in DB — they'll get it on next fetch
+
+      } catch (err) {
+        console.error('sendMessage error:', err);
+        socket.emit('messageError', { error: 'Message could not be sent' });
       }
     });
 
+    // Handle typing indicator
     socket.on('typing', ({ senderId, receiverId }) => {
       const receiverSocketId = onlineUsers[receiverId];
       if (receiverSocketId) {
@@ -37,6 +58,7 @@ export const initSocket = (httpServer) => {
       }
     });
 
+    // Handle stop typing
     socket.on('stopTyping', ({ senderId, receiverId }) => {
       const receiverSocketId = onlineUsers[receiverId];
       if (receiverSocketId) {
@@ -44,6 +66,7 @@ export const initSocket = (httpServer) => {
       }
     });
 
+    // Handle disconnect
     socket.on('disconnect', () => {
       const userId = Object.keys(onlineUsers).find(
         (key) => onlineUsers[key] === socket.id
@@ -59,7 +82,6 @@ export const initSocket = (httpServer) => {
   return io;
 };
 
-// Export io instance to use in other files (e.g. routes)
 export const getIO = () => {
   if (!io) throw new Error('Socket.io not initialized!');
   return io;

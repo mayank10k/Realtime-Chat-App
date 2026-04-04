@@ -21,7 +21,7 @@ router.post("/send", verifyToken, async (req, res) => {
       content,
     });
 
-    await message.populate("sender", "username email");
+    await message.populate("sender", "name email");
 
     res.status(201).json({ success: true, message });
   } catch (err) {
@@ -50,8 +50,8 @@ router.get("/:userId", verifyToken, async (req, res) => {
       .sort({ createdAt: 1 })
       .skip(skip)
       .limit(limit)
-      .populate("sender",   "username email")
-      .populate("receiver", "username email");
+      .populate("sender",   "name email")
+      .populate("receiver", "name email");
 
     res.json({ success: true, messages, page, limit });
   } catch (err) {

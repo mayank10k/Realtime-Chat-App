@@ -58,17 +58,8 @@ router.post('/login',async(req,res)=>{
 
         const user=await User.findOne({email});
         if(!user || !(await user.comparePassword(password))){
-            // return res.status(401).json({error:"invalid email id or password"})
-            res.status(200).json({
-                message: "login successful",
-                token,
-                user: {
-                    id: user._id,
-                    name: user.name,
-                    email: user.email
-                }
-            });
-        }
+        return res.status(401).json({ error: "Invalid email or password" });
+}
 
         //generate token
         const payload={
