@@ -1,4 +1,5 @@
 import { Server } from 'socket.io';
+import jwt from 'jsonwebtoken';
 import Message from './models/message.js';
 
 const onlineUsers = {};
@@ -6,76 +7,79 @@ let io;
 
 export const initSocket = (httpServer) => {
   io = new Server(httpServer, {
-    cors: {
-      origin: '*', // Replace with your frontend URL in production
-      methods: ['GET', 'POST']
+    cors: { origin: '*', methods: ['GET', 'POST'] }
+  });
+
+  // 🔐 Auth middleware — runs before every connection
+  io.use((socket, next) => {
+    const token = socket.handshake.auth?.token;
+    if (!token) return next(new Error('Unauthorized'));
+    try {
+      socket.user = jwt.verify(token, process.env.JWT_SECRET);
+      next();
+    } catch {
+      next(new Error('Invalid token'));
     }
   });
 
   io.on('connection', (socket) => {
-    console.log('A user connected:', socket.id);
+    const userId = socket.user._id.toString();
+    onlineUsers[userId] = socket.id;
+    io.emit('onlineUsers', Object.keys(onlineUsers));
+    console.log(`User ${userId} connected`);
 
-    // User registers with their userId after login
-    socket.on('register', (userId) => {
-      onlineUsers[userId] = socket.id;
-      console.log(`User ${userId} registered with socket ${socket.id}`);
-      io.emit('onlineUsers', Object.keys(onlineUsers));
-    });
-
-    // Handle sending a message
-    socket.on('sendMessage', async ({ senderId, receiverId, message }) => {
+    socket.on('sendMessage', async ({ receiverId, message }) => {
       try {
-        // ✅ Save to DB first
+        const senderId = socket.user._id;
+
         const newMessage = await Message.create({
           sender: senderId,
           receiver: receiverId,
           content: message
         });
 
-        const receiverSocketId = onlineUsers[receiverId];
+        // Confirm to sender
+        socket.emit('messageSent', {
+          _id: newMessage._id,
+          receiverId,
+          message,
+          timestamp: newMessage.createdAt
+        });
 
+        // Deliver to receiver if online
+        const receiverSocketId = onlineUsers[receiverId];
         if (receiverSocketId) {
-          // ✅ Receiver is online — deliver in real time
           io.to(receiverSocketId).emit('receiveMessage', {
             senderId,
             message,
-            timestamp: newMessage.createdAt
+            timestamp: newMessage.createdAt,
+            _id: newMessage._id
           });
         }
-        // ✅ If offline, message is already saved in DB — they'll get it on next fetch
-
       } catch (err) {
         console.error('sendMessage error:', err);
         socket.emit('messageError', { error: 'Message could not be sent' });
       }
     });
 
-    // Handle typing indicator
-    socket.on('typing', ({ senderId, receiverId }) => {
+    socket.on('typing', ({ receiverId }) => {
       const receiverSocketId = onlineUsers[receiverId];
       if (receiverSocketId) {
-        io.to(receiverSocketId).emit('typing', { senderId });
+        io.to(receiverSocketId).emit('typing', { senderId: socket.user._id });
       }
     });
 
-    // Handle stop typing
-    socket.on('stopTyping', ({ senderId, receiverId }) => {
+    socket.on('stopTyping', ({ receiverId }) => {
       const receiverSocketId = onlineUsers[receiverId];
       if (receiverSocketId) {
-        io.to(receiverSocketId).emit('stopTyping', { senderId });
+        io.to(receiverSocketId).emit('stopTyping', { senderId: socket.user._id });
       }
     });
 
-    // Handle disconnect
     socket.on('disconnect', () => {
-      const userId = Object.keys(onlineUsers).find(
-        (key) => onlineUsers[key] === socket.id
-      );
-      if (userId) {
-        delete onlineUsers[userId];
-        io.emit('onlineUsers', Object.keys(onlineUsers));
-        console.log(`User ${userId} disconnected`);
-      }
+      delete onlineUsers[userId];
+      io.emit('onlineUsers', Object.keys(onlineUsers));
+      console.log(`User ${userId} disconnected`);
     });
   });
 

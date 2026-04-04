@@ -12,9 +12,10 @@ connectDB();
 const app = express();
 const httpServer = createServer(app);
 
+app.use(express.json());
+
 initSocket(httpServer);  //  connect socket to server
 
-app.use(express.json());
 app.use('/user', userRoutes);
 app.use('/messages', messageRoutes);
 
