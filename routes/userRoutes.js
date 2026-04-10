@@ -1,103 +1,81 @@
-import express from 'express'
-const router=express.Router();
+import express from 'express';
+import User from '../models/user.js';
+import { jwtAuthMiddleware, generateToken } from '../jwt.js';
 
-import User from '../models/user.js'
-import {jwtAuthMiddleware,generateToken} from './../jwt.js';
+const router = express.Router();
 
+router.post('/register', async (req, res) => {
+  try {
+    const { email, password, name, username } = req.body;
 
-router.post('/register',async(req,res)=>{
-    try{
-        const data=req.body;
-        const { email, password, name } = req.body;
-        if (!email || !password || !name) {
-            return res.status(400).json({ error: "All fields are required" });
-        }
-        const existingUser = await User.findOne({ email });
-        if (existingUser) {
-            return res.status(400).json({ error: "User already exists" });
-        }
-
-        // console.log(data);
-        const newUser=new User(data);
-
-        const response=await newUser.save();
-        console.log("User data saved");
-
-        const payload={
-            id:response._id
-        }
-        console.log(JSON.stringify(payload));
-        const token=generateToken(payload);
-        // console.log("Token is:",token);
-        // res.status(200).json({response:response,token:token})
-        return res.status(201).json({message: "User registered successfully",
-        token,
-        user: {
-            id: response._id,
-            name: response.name,
-            email: response.email
-        }
-        });
-
-    }catch(err){
-        console.log(err);
-        res.status(500).json({error:"internal server error"})
-
+    if (!email || !password || !name || !username) {
+      return res.status(400).json({ error: "All fields are required" });
     }
-    
-})
 
-router.post('/login',async(req,res)=>{
-    try{
-        const data=req.body;
-        // console.log(data);
-        const {email,password}=req.body;
-        if (!email || !password) {
-            return res.status(400).json({ error: "Email and password are required" });
-        }
-
-        const user=await User.findOne({email});
-        if(!user || !(await user.comparePassword(password))){
-        return res.status(401).json({ error: "Invalid email or password" });
-}
-
-        //generate token
-        const payload={
-            id:user._id
-        }
-        const token=generateToken(payload);
-        res.status(200).json({message:"login successful",token:token});
-
-    }catch(err){
-        console.log(err);
-        res.status(500).json({error:"internal server error"})
-
+    const existingEmail = await User.findOne({ email });
+    if (existingEmail) {
+      return res.status(400).json({ error: "Email already in use" });
     }
-    
-})
 
-//profile route
-router.get('/profile',jwtAuthMiddleware,async(req,res)=>{
-  try{
-    const userData=req.user;    //req.user == token form jwt.js(given by middle ware)
-    // console.log("user data",userData);
-
-    const userId=userData.id;
-    const user=await User.findById(userId);
-    // return res.status(200).json({user});
-    return res.status(200).json({
-    user: {
-        id: user._id,
-        name: user.name,
-        email: user.email
+    const existingUsername = await User.findOne({ username });
+    if (existingUsername) {
+      return res.status(400).json({ error: "Username already taken" });
     }
+
+    // ✅ Only pass trusted fields
+    const newUser = new User({ name, username, email, password });
+    const response = await newUser.save();
+
+    const token = generateToken({ id: response._id });
+
+    return res.status(201).json({
+      message: "User registered successfully",
+      token,
+      user: response  // toJSON() auto-strips password
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
-  }catch(err){
-    console.log(err);
-    return res.status(500).json({error:"internal server error"})
+router.post('/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email and password are required" });
+    }
+
+    const user = await User.findOne({ email });
+    if (!user || !(await user.comparePassword(password))) {
+      return res.status(401).json({ error: "Invalid email or password" });
+    }
+
+    const token = generateToken({ id: user._id });
+
+    // ✅ Return user info alongside token
+    res.status(200).json({
+      message: "Login successful",
+      token,
+      user  // toJSON() auto-strips password
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal server error" });
   }
-})
+});
+
+router.get('/profile', jwtAuthMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    return res.status(200).json({ user }); // toJSON() strips password
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
 
 export default router;
-
