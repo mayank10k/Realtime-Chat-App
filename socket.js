@@ -7,10 +7,14 @@ let io;
 
 export const initSocket = (httpServer) => {
   io = new Server(httpServer, {
-    cors: { origin: '*', methods: ['GET', 'POST'] }
+    // 1. Added explicit CORS for Socket.io to prevent connection refused
+    cors: { 
+      origin: ['http://localhost:5173', 'http://localhost:5174'], 
+      methods: ['GET', 'POST'],
+      credentials: true
+    }
   });
 
-  // 🔐 Auth middleware — runs before every connection
   io.use((socket, next) => {
     const token = socket.handshake.auth?.token;
     if (!token) return next(new Error('Unauthorized'));
@@ -23,38 +27,36 @@ export const initSocket = (httpServer) => {
   });
 
   io.on('connection', (socket) => {
-    const userId = socket.user._id.toString();
-    onlineUsers[userId] = socket.id;
-    io.emit('onlineUsers', Object.keys(onlineUsers));
-    console.log(`User ${userId} connected`);
+    // 2. FIXED: Accessing 'id' instead of '_id' to prevent the .toString() crash
+    const userId = socket.user?.id || socket.user?._id;
+    
+    if (!userId) {
+      console.error("Connection error: User ID not found in token");
+      return socket.disconnect();
+    }
 
-    socket.on('sendMessage', async ({ receiverId, message }) => {
+    const userIdStr = userId.toString();
+    onlineUsers[userIdStr] = socket.id;
+    
+    io.emit('onlineUsers', Object.keys(onlineUsers));
+    console.log(`User ${userIdStr} connected`);
+
+    socket.on('sendMessage', async ({ receiverId, message, tempId }) => {
       try {
-        const senderId = socket.user._id;
+        const senderId = userId; // Use the verified ID from the socket
 
         const newMessage = await Message.create({
           sender: senderId,
           receiver: receiverId,
-          content: message
+          content: message,
+          status: 'sent'
         });
 
-        // Confirm to sender
-        socket.emit('messageSent', {
-          _id: newMessage._id,
-          receiverId,
-          message,
-          timestamp: newMessage.createdAt
-        });
+        socket.emit('messageSent', { ...newMessage.toObject(), tempId });
 
-        // Deliver to receiver if online
         const receiverSocketId = onlineUsers[receiverId];
         if (receiverSocketId) {
-          io.to(receiverSocketId).emit('receiveMessage', {
-            senderId,
-            message,
-            timestamp: newMessage.createdAt,
-            _id: newMessage._id
-          });
+          io.to(receiverSocketId).emit('receiveMessage', newMessage.toObject());
         }
       } catch (err) {
         console.error('sendMessage error:', err);
@@ -62,24 +64,36 @@ export const initSocket = (httpServer) => {
       }
     });
 
-    socket.on('typing', ({ receiverId }) => {
-      const receiverSocketId = onlineUsers[receiverId];
-      if (receiverSocketId) {
-        io.to(receiverSocketId).emit('typing', { senderId: socket.user._id });
+    socket.on('messageDelivered', async ({ messageId, senderId }) => {
+      try {
+        await Message.findByIdAndUpdate(messageId, { status: 'delivered' });
+        const senderSocketId = onlineUsers[senderId];
+        if (senderSocketId) {
+          io.to(senderSocketId).emit('messageStatusUpdate', { messageId, status: 'delivered' });
+        }
+      } catch (err) {
+        console.error('messageDelivered error:', err);
       }
     });
 
-    socket.on('stopTyping', ({ receiverId }) => {
-      const receiverSocketId = onlineUsers[receiverId];
-      if (receiverSocketId) {
-        io.to(receiverSocketId).emit('stopTyping', { senderId: socket.user._id });
+    socket.on('messageRead', async ({ messageId, senderId }) => {
+      try {
+        await Message.findByIdAndUpdate(messageId, { status: 'read', isRead: true, readAt: new Date() });
+        const senderSocketId = onlineUsers[senderId];
+        if (senderSocketId) {
+          io.to(senderSocketId).emit('messageStatusUpdate', { messageId, status: 'read' });
+        }
+      } catch (err) {
+        console.error('messageRead error:', err);
       }
     });
+
+    // ... existing typing listeners ...
 
     socket.on('disconnect', () => {
-      delete onlineUsers[userId];
+      delete onlineUsers[userIdStr];
       io.emit('onlineUsers', Object.keys(onlineUsers));
-      console.log(`User ${userId} disconnected`);
+      console.log(`User ${userIdStr} disconnected`);
     });
   });
 

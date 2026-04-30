@@ -1,5 +1,6 @@
 import express from 'express';
 import User from '../models/user.js';
+import Message from '../models/message.js';
 import { jwtAuthMiddleware, generateToken } from '../jwt.js';
 
 const router = express.Router();
@@ -72,6 +73,45 @@ router.get('/profile', jwtAuthMiddleware, async (req, res) => {
     if (!user) return res.status(404).json({ error: "User not found" });
 
     return res.status(200).json({ user }); // toJSON() strips password
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.get('/contacts', jwtAuthMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    // Return all users except the current user
+    const users = await User.find({ _id: { $ne: userId } }).select('-password');
+    
+    // Fetch last message and unread count for each user
+    const contactsWithLastMessage = await Promise.all(users.map(async (user) => {
+      const lastMessage = await Message.findOne({
+        $or: [
+          { sender: userId, receiver: user._id },
+          { sender: user._id, receiver: userId }
+        ]
+      }).sort({ createdAt: -1 });
+
+      const unreadCount = await Message.countDocuments({
+        sender: user._id,
+        receiver: userId,
+        status: { $ne: 'read' }
+      });
+
+      return {
+        ...user.toJSON(),
+        lastMessageAt: lastMessage ? lastMessage.createdAt : new Date(0), // Default to epoch
+        lastMessage: lastMessage ? lastMessage.content : null,
+        unreadCount
+      };
+    }));
+
+    // Sort contacts by last message time (most recent first)
+    contactsWithLastMessage.sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt));
+
+    return res.status(200).json({ contacts: contactsWithLastMessage });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: "Internal server error" });

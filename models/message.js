@@ -23,6 +23,11 @@ const messageSchema = new mongoose.Schema(
       enum: ["text", "image", "file"],  // ✅ future-proof for media messages
       default: "text",
     },
+    status: {
+      type: String,
+      enum: ["sent", "delivered", "read"],
+      default: "sent",
+    },
     isRead: {
       type: Boolean,
       default: false,
